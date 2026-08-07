@@ -1,0 +1,37 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: calderilla
+      POSTGRES_USER: calderilla
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-calderilla}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U calderilla"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  web:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://calderilla:calderilla@db:5432/calderilla}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+
+  adminer:
+    image: adminer:5
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+
+volumes:
+  postgres-data:

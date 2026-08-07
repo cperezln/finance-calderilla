@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Calderilla</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <style>
+    :root {
+      font:16px system-ui; color-scheme:light;
+      --primary:#1b5e20; --secondary:#558b2f; --expense:#b3261e; --income:#00897b;
+      --background:#fffbfe; --surface:#fffbfe; --surface-container:#f3edf7;
+      --surface-variant:#e7e0ec; --on-surface:#1d1b20; --on-variant:#49454f;
+      --outline:#79747e; --outline-variant:#cac4d0;
+    }
+    @media (prefers-color-scheme:dark) {
+      :root {
+        color-scheme:dark; --primary:#81c784; --secondary:#aed581;
+        --background:#1c1b1f; --surface:#1c1b1f; --surface-container:#211f26;
+        --surface-variant:#49454f; --on-surface:#e6e1e5; --on-variant:#cac4d0;
+        --outline:#938f99; --outline-variant:#49454f;
+      }
+    }
+    * { box-sizing:border-box; }
+    [hidden] { display:none !important; }
+    body { margin:0; background:var(--background); color:var(--on-surface); }
+    button, input, select, .button {
+      min-width:0; padding:.7rem; border:1px solid var(--outline); border-radius:12px;
+      background:var(--surface); color:var(--on-surface); font:inherit;
+    }
+    button, .button { cursor:pointer; }
+    input:focus, select:focus { outline:2px solid var(--primary); outline-offset:1px; }
+    .primary { border:0; background:var(--primary); color:var(--background); font-weight:700; }
+    .button { display:inline-block; text-decoration:none; }
+    .shell { display:grid; grid-template-columns:220px minmax(0,1fr); min-height:100vh; }
+    .sidebar {
+      position:sticky; top:0; height:100vh; display:flex; flex-direction:column; gap:1rem;
+      padding:1.25rem .75rem; border-right:1px solid var(--outline-variant); background:var(--surface-container);
+    }
+    .brand { display:flex; align-items:center; gap:.75rem; padding:.25rem .5rem 1rem; }
+    .brand img { width:42px; height:42px; border-radius:12px; }
+    .brand strong { font-size:1.3rem; }
+    .sidebar nav { display:flex; flex-direction:column; gap:.35rem; }
+    .nav-button { display:flex; align-items:center; gap:.75rem; border:0; background:transparent; text-align:left; }
+    .nav-button.active { background:var(--surface-variant); color:var(--primary); font-weight:700; }
+    .nav-icon { width:1.5rem; text-align:center; font-size:1.3rem; }
+    .settings-nav { margin-top:auto; }
+    .workspace { min-width:0; padding:1.5rem; }
+    .topbar, .screen { width:100%; max-width:1400px; margin:auto; }
+    .topbar { display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; }
+    .topbar h1, h2, h3 { margin:.4rem 0; }
+    .total { text-align:right; }
+    .total small, .muted { display:block; color:var(--on-variant); }
+    .layout { display:grid; grid-template-columns:minmax(340px,.8fr) minmax(0,1.2fr); gap:1rem; }
+    .card { border-radius:24px; padding:1.25rem; background:var(--surface-container); box-shadow:0 1px 3px #0002; }
+    .movement-form, .account-form { display:grid; grid-template-columns:1fr 1fr; gap:.75rem; }
+    .movement-form input[name=note], .movement-form button, .movement-form .tag-picker, .account-form button { grid-column:1/-1; }
+    ul { list-style:none; padding:0; margin:1rem 0 0; max-height:52vh; overflow:auto; }
+    li { display:flex; gap:.75rem; align-items:center; border-bottom:1px solid var(--outline-variant); padding:.8rem 0; }
+    .transaction-label { flex:1; }
+    li button { border:0; background:transparent; color:var(--on-variant); font-size:1.25rem; }
+    .metadata, .tag-chips { display:flex; flex-wrap:wrap; gap:.35rem; margin-top:.35rem; }
+    .account-tag, .tag-badge { padding:.15rem .45rem; border-radius:8px; background:var(--surface-variant); color:var(--on-variant); font-size:.75rem; }
+    .tag-badge { color:var(--primary); }
+    .tag-picker { padding:.75rem; border-radius:14px; background:var(--surface-variant); }
+    .tag-picker input { width:100%; margin-top:.6rem; }
+    .tag-chip { padding:.35rem .6rem; border-color:var(--outline-variant); background:var(--surface); font-size:.85rem; }
+    .tag-chip.selected { border-color:var(--primary); background:var(--primary); color:var(--background); }
+    .expense { color:var(--expense); }
+    .income { color:var(--income); }
+    .controls, .summary, .legend { display:flex; flex-wrap:wrap; gap:.75rem; align-items:center; }
+    .controls input { width:7rem; }
+    .summary { justify-content:space-between; margin:1rem 0; }
+    .summary div { min-width:9rem; padding:.75rem; border-radius:14px; background:var(--surface-variant); }
+    .summary small { display:block; color:var(--on-variant); }
+    .legend { margin-bottom:.5rem; }
+    .dot { width:.7rem; height:.7rem; border-radius:50%; display:inline-block; }
+    .chart-scroll { overflow-x:auto; padding:.5rem 0; }
+    #chart { display:flex; align-items:stretch; gap:3px; height:280px; min-width:max-content; border-bottom:1px solid var(--outline-variant); }
+    .day { width:17px; display:grid; grid-template-rows:1fr 2.7rem; }
+    .bars { display:flex; align-items:flex-end; gap:1px; }
+    .bar { width:8px; border-radius:3px 3px 0 0; }
+    .bar.expense { background:var(--expense); }
+    .bar.income { background:var(--income); }
+    .day-label { font-size:.65rem; writing-mode:vertical-rl; padding-top:.25rem; color:var(--on-variant); }
+    #chart-empty { text-align:center; color:var(--on-variant); padding:4rem 1rem; }
+    .accounts-layout { display:grid; grid-template-columns:minmax(0,1.3fr) minmax(280px,.7fr); gap:1rem; }
+    .account-row { display:flex; align-items:center; gap:.75rem; padding:1rem 0; border-bottom:1px solid var(--outline-variant); }
+    .account-row span { flex:1; font-weight:600; }
+    .account-row small { display:block; margin-top:.2rem; color:var(--on-variant); font-weight:400; }
+    .account-row button { color:var(--primary); border-color:var(--primary); }
+    .settings-grid { display:grid; grid-template-columns:1fr 1fr; gap:1rem; }
+    .settings-grid article { padding:1rem; border-radius:16px; background:var(--surface-variant); }
+    .import-form { display:flex; flex-direction:column; gap:.75rem; margin-top:1rem; }
+    #import-result { margin-top:.75rem; }
+    @media (max-width:850px) {
+      .shell { display:block; }
+      .workspace { padding:1rem 1rem 5.5rem; }
+      .sidebar {
+        position:fixed; z-index:10; inset:auto 0 0; width:100%; height:auto; flex-direction:row;
+        gap:.25rem; padding:.45rem; border:0; border-top:1px solid var(--outline-variant);
+      }
+      .sidebar .brand { display:none; }
+      .sidebar nav { flex:1; flex-direction:row; }
+      .nav-button { flex:1; flex-direction:column; gap:.1rem; padding:.4rem; font-size:.75rem; text-align:center; }
+      .nav-icon { font-size:1.2rem; }
+      .settings-nav { margin:0; }
+      .layout, .accounts-layout, .settings-grid { grid-template-columns:1fr; }
+      ul { max-height:none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand"><img src="/favicon.svg" alt=""><strong>Calderilla</strong></div>
+      <nav>
+        <button class="nav-button active" data-screen="home"><span class="nav-icon">⌂</span><span>Inicio</span></button>
+        <button class="nav-button" data-screen="accounts"><span class="nav-icon">▤</span><span>Cuentas</span></button>
+      </nav>
+      <button class="nav-button settings-nav" data-screen="settings"><span class="nav-icon">⚙</span><span>Ajustes</span></button>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <h1 id="screen-title">Inicio</h1>
+        <div class="total"><small>Total</small><strong id="balance">—</strong></div>
+      </header>
+
+      <main>
+        <section id="home-screen" class="screen">
+          <div class="layout">
+            <section class="card">
+              <h2>Añadir movimiento</h2>
+              <form id="movement-form" class="movement-form">
+                <select name="kind" aria-label="Tipo"><option value="expense">Gasto</option><option value="income">Ingreso</option></select>
+                <input name="amount" inputmode="decimal" placeholder="Cantidad (€)" required>
+                <select name="account" aria-label="Cuenta" required></select>
+                <input name="date" type="date" required>
+                <input name="note" placeholder="Nota (opcional)">
+                <div class="tag-picker"><span class="muted">Etiquetas</span><div id="tag-chips" class="tag-chips"></div><input name="newTags" placeholder="Nuevas etiquetas, separadas por comas"></div>
+                <button class="primary">Guardar</button>
+              </form>
+              <h2>Historial</h2>
+              <p id="empty">Aún no hay movimientos.</p>
+              <ul id="transactions"></ul>
+            </section>
+
+            <section class="card">
+              <h2>Gastos e ingresos diarios</h2>
+              <div class="controls">
+                <select id="chart-account" aria-label="Cuenta del gráfico"></select>
+                <select id="chart-tag" aria-label="Etiqueta del gráfico"></select>
+                <label>Últimos <input id="days" type="number" min="1" max="730" value="30"> días</label>
+                <select id="period" aria-label="Periodo">
+                  <option value="7">Semana</option><option value="30" selected>Mes</option>
+                  <option value="90">Trimestre</option><option value="180">Semestre</option>
+                  <option value="365">Año</option><option value="">Personalizado</option>
+                </select>
+              </div>
+              <div class="summary">
+                <div><small>Gastos</small><strong id="expenses" class="expense">—</strong></div>
+                <div><small>Ingresos</small><strong id="income" class="income">—</strong></div>
+                <div><small>Balance</small><strong id="period-balance">—</strong></div>
+              </div>
+              <div class="legend"><span class="dot" style="background:var(--expense)"></span> Gastos <span class="dot" style="background:var(--income)"></span> Ingresos</div>
+              <div class="chart-scroll"><div id="chart"></div><p id="chart-empty">Sin movimientos en este periodo.</p></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="accounts-screen" class="screen" hidden>
+          <div class="accounts-layout">
+            <section class="card"><h2>Tus cuentas</h2><p class="muted">La cuenta predeterminada se selecciona automáticamente al añadir movimientos.</p><div id="account-list"></div></section>
+            <section class="card"><h2>Nueva cuenta</h2><form id="account-form" class="account-form"><input name="name" placeholder="Nombre (p. ej. Banco)" maxlength="80" required><input name="opening" inputmode="decimal" placeholder="Saldo inicial (€)"><button class="primary">Crear cuenta</button></form></section>
+          </div>
+        </section>
+
+        <section id="settings-screen" class="screen" hidden>
+          <section class="card">
+            <h2>Importar y exportar</h2>
+            <div class="settings-grid">
+              <article><h3>Exportar CSV</h3><p>Descarga todos los movimientos con sus cuentas y etiquetas, manteniendo las columnas compatibles con Calderilla Android.</p><a class="button primary" href="/api/export.csv" download>Descargar CSV</a></article>
+              <article><h3>Importar CSV</h3><p>Las cuentas que aparezcan en el archivo y no existan se crearán automáticamente. Importar el mismo archivo dos veces duplicará sus movimientos.</p><form id="import-form" class="import-form"><input name="file" type="file" accept=".csv,text/csv" required><button class="primary">Importar CSV</button></form><p id="import-result" class="muted"></p></article>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <script>
+    const movementForm=document.querySelector('#movement-form'), accountForm=document.querySelector('#account-form');
+    const importForm=document.querySelector('#import-form'), list=document.querySelector('#transactions');
+    const chart=document.querySelector('#chart'), daysInput=document.querySelector('#days'), period=document.querySelector('#period');
+    const accountSelect=movementForm.account, chartAccount=document.querySelector('#chart-account'), chartTag=document.querySelector('#chart-tag');
+    const selectedTags=new Set();
+    let transactions=[], accounts=[], tags=[], defaultAccountId, currency='EUR';
+    const money=cents=>new Intl.NumberFormat('es-ES',{style:'currency',currency}).format(cents/100);
+    const dateKey=date=>[date.getFullYear(),String(date.getMonth()+1).padStart(2,'0'),String(date.getDate()).padStart(2,'0')].join('-');
+    movementForm.date.value=dateKey(new Date());
+
+    function showScreen(name) {
+      const titles={home:'Inicio',accounts:'Cuentas',settings:'Ajustes'};
+      document.querySelectorAll('.screen').forEach(screen=>screen.hidden=screen.id!==`${name}-screen`);
+      document.querySelectorAll('.nav-button').forEach(button=>button.classList.toggle('active',button.dataset.screen===name));
+      document.querySelector('#screen-title').textContent=titles[name];
+    }
+    document.querySelectorAll('.nav-button').forEach(button=>button.onclick=()=>showScreen(button.dataset.screen));
+
+    function renderChart() {
+      const count=Math.max(1,Math.min(730,Number(daysInput.value)||30)); daysInput.value=count;
+      const start=new Date(); start.setDate(start.getDate()-count+1);
+      const buckets=Array.from({length:count},(_,index)=>{ const day=new Date(start); day.setDate(start.getDate()+index); return {date:dateKey(day),expense:0,income:0}; });
+      const byDate=new Map(buckets.map(bucket=>[bucket.date,bucket]));
+      const filtered=transactions.filter(row=>(!chartAccount.value||row.account_id===chartAccount.value)&&(!chartTag.value||row.tags.includes(chartTag.value)));
+      filtered.forEach(row=>{ const bucket=byDate.get(row.date); if(bucket) bucket[row.kind]+=row.amount_cents; });
+      const expenses=buckets.reduce((sum,row)=>sum+row.expense,0), income=buckets.reduce((sum,row)=>sum+row.income,0);
+      const max=Math.max(1,...buckets.flatMap(row=>[row.expense,row.income])), labelEvery=Math.max(1,Math.ceil(count/14));
+      document.querySelector('#expenses').textContent=money(-expenses); document.querySelector('#income').textContent=money(income);
+      const periodBalance=document.querySelector('#period-balance'); periodBalance.textContent=money(income-expenses); periodBalance.className=income>=expenses?'income':'expense';
+      document.querySelector('#chart-empty').hidden=expenses+income>0; chart.hidden=expenses+income===0;
+      chart.replaceChildren(...buckets.map((row,index)=>{
+        const day=document.createElement('div'), bars=document.createElement('div'), label=document.createElement('span'); day.className='day'; bars.className='bars'; label.className='day-label';
+        ['expense','income'].forEach(kind=>{ const bar=document.createElement('div'); bar.className=`bar ${kind}`; bar.style.height=`${row[kind]?Math.max(2,row[kind]/max*230):0}px`; bar.title=`${row.date} · ${kind==='expense'?'Gastos':'Ingresos'}: ${money(row[kind])}`; bars.append(bar); });
+        label.textContent=index%labelEvery===0||index===count-1?row.date.slice(5):''; day.append(bars,label); return day;
+      }));
+    }
+
+    function renderAccounts() {
+      const entryValue=accountSelect.value||defaultAccountId, chartValue=chartAccount.value;
+      accountSelect.replaceChildren(...accounts.map(account=>new Option(account.name,account.id)));
+      accountSelect.value=accounts.some(account=>account.id===entryValue)?entryValue:defaultAccountId;
+      chartAccount.replaceChildren(new Option('Todas las cuentas',''),...accounts.map(account=>new Option(account.name,account.id)));
+      chartAccount.value=accounts.some(account=>account.id===chartValue)?chartValue:'';
+      document.querySelector('#account-list').replaceChildren(...accounts.map(account=>{
+        const row=document.createElement('div'), text=document.createElement('span'); row.className='account-row'; text.textContent=account.name;
+        const balance=document.createElement('small'); balance.textContent=money(account.balance_cents); text.append(balance); row.append(text);
+        if(account.id===defaultAccountId){ const label=document.createElement('strong'); label.textContent='Predeterminada'; label.className='income'; row.append(label); }
+        else { const button=document.createElement('button'); button.textContent='Usar por defecto'; button.onclick=async()=>{ await fetch(`/api/accounts/${account.id}/default`,{method:'PUT'}); accountSelect.value=account.id; await refresh(); }; row.append(button); }
+        return row;
+      }));
+    }
+
+    function renderTags() {
+      const chartValue=chartTag.value;
+      chartTag.replaceChildren(new Option('Todas las etiquetas',''),...tags.map(tag=>new Option(`#${tag.name}`,tag.name)));
+      chartTag.value=tags.some(tag=>tag.name===chartValue)?chartValue:'';
+      document.querySelector('#tag-chips').replaceChildren(...tags.map(tag=>{
+        const button=document.createElement('button'); button.type='button'; button.textContent=`#${tag.name}`;
+        button.className=`tag-chip${selectedTags.has(tag.name)?' selected':''}`;
+        button.onclick=()=>{ selectedTags.has(tag.name)?selectedTags.delete(tag.name):selectedTags.add(tag.name); renderTags(); };
+        return button;
+      }));
+    }
+
+    async function refresh() {
+      const state=await fetch('/api/state').then(response=>response.json());
+      transactions=state.transactions; accounts=state.accounts; tags=state.tags; defaultAccountId=state.default_account_id; currency=state.ledger.currency;
+      document.querySelector('#balance').textContent=money(state.balance_cents); renderAccounts(); renderTags(); document.querySelector('#empty').hidden=transactions.length>0;
+      list.replaceChildren(...transactions.map(row=>{
+        const item=document.createElement('li'), label=document.createElement('div'), amount=document.createElement('strong'), remove=document.createElement('button'); label.className='transaction-label';
+        label.textContent=`${row.date} · ${row.note||(row.kind==='expense'?'Gasto':'Ingreso')}`;
+        const metadata=document.createElement('div'), account=document.createElement('span'); metadata.className='metadata'; account.className='account-tag'; account.textContent=row.account_name; metadata.append(account);
+        row.tags.forEach(name=>{ const tag=document.createElement('span'); tag.className='tag-badge'; tag.textContent=`#${name}`; metadata.append(tag); }); label.append(metadata);
+        amount.textContent=`${row.kind==='expense'?'−':'+'}${money(row.amount_cents)}`; amount.className=row.kind;
+        remove.textContent='×'; remove.ariaLabel='Borrar movimiento'; remove.onclick=async()=>{ await fetch(`/api/transactions/${row.id}`,{method:'DELETE'}); refresh(); };
+        item.append(label,amount,remove); return item;
+      }));
+      renderChart();
+    }
+
+    period.onchange=()=>{ if(period.value) daysInput.value=period.value; renderChart(); };
+    daysInput.oninput=()=>{ period.value=''; renderChart(); }; chartAccount.onchange=renderChart; chartTag.onchange=renderChart;
+    accountForm.onsubmit=async event=>{
+      event.preventDefault(); const data=new FormData(accountForm), raw=data.get('opening').trim(), parts=raw.match(/^(-)?(\d+)(?:[,.](\d{1,2}))?$/);
+      if(raw&&!parts) return alert('Saldo inicial no válido');
+      const opening_balance_cents=raw?(parts[1]?-1:1)*(Number(parts[2])*100+Number((parts[3]||'').padEnd(2,'0'))):0;
+      if(!Number.isSafeInteger(opening_balance_cents)) return alert('Saldo inicial no válido');
+      const response=await fetch('/api/accounts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:data.get('name'),opening_balance_cents})});
+      if(!response.ok) return alert(response.status===409?'Ya existe una cuenta con ese nombre':'No se pudo crear la cuenta');
+      const created=await response.json(); accountForm.reset(); await refresh(); accountSelect.value=created.id;
+    };
+    movementForm.onsubmit=async event=>{
+      event.preventDefault(); const data=new FormData(movementForm), parts=data.get('amount').trim().match(/^(\d+)(?:[,.](\d{1,2}))?$/);
+      if(!parts) return alert('Cantidad no válida');
+      const amount_cents=Number(parts[1])*100+Number((parts[2]||'').padEnd(2,'0'));
+      if(!Number.isSafeInteger(amount_cents)||amount_cents<=0) return alert('Cantidad no válida');
+      const typed=data.get('newTags').split(',').map(name=>name.trim()).filter(Boolean), assigned=[...selectedTags,...typed];
+      const response=await fetch('/api/transactions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({account_id:data.get('account'),kind:data.get('kind'),amount_cents,date:data.get('date'),note:data.get('note')||null,tags:assigned})});
+      if(!response.ok) return alert('No se pudo guardar'); movementForm.amount.value=''; movementForm.note.value=''; movementForm.newTags.value=''; selectedTags.clear(); refresh();
+    };
+    importForm.onsubmit=async event=>{
+      event.preventDefault(); const file=importForm.file.files[0], result=document.querySelector('#import-result'); result.textContent='Importando…';
+      const response=await fetch('/api/import.csv',{method:'POST',body:file});
+      if(!response.ok){ result.textContent='No se pudo importar el archivo.'; return; }
+      const report=await response.json(); result.textContent=`${report.imported} movimientos importados · ${report.skipped} filas ignoradas · ${report.created_accounts} cuentas creadas`;
+      importForm.reset(); await refresh();
+    };
+    refresh();
+  </script>
+</body>
+</html>
