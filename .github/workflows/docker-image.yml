@@ -27,10 +27,8 @@ jobs:
 
       # Como mínimo verificamos que Docker construye
       - name: Test Docker build
-        working-directory: ./backend
         run: |
-          docker build -t app-test .
-
+          docker build -t app-test -f backend/Dockerfile .
   publish:
     if: github.event_name == 'push'
     needs:
