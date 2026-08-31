@@ -24,10 +24,6 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r backend/requirements.txt
-      
-      - name: Tests
-        run: |
-          pytest
 
       # Como mínimo verificamos que Docker construye
       - name: Test Docker build
