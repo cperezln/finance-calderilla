@@ -23,7 +23,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r backend/app/requirements.txt
+          pip install -r backend/requirements.txt
       
       - name: Tests
         run: |
