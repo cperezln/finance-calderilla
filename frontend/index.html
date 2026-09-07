@@ -68,6 +68,7 @@
     .tag-chip.selected { border-color:var(--primary); background:var(--primary); color:var(--background); }
     .expense { color:var(--expense); }
     .income { color:var(--income); }
+    .transfer { color:var(--primary); }
     .controls, .summary, .legend { display:flex; flex-wrap:wrap; gap:.75rem; align-items:center; }
     .controls input { width:7rem; }
     .summary { justify-content:space-between; margin:1rem 0; }
@@ -133,10 +134,11 @@
             <section class="card">
               <h2>Añadir movimiento</h2>
               <form id="movement-form" class="movement-form">
-                <select name="kind" aria-label="Tipo"><option value="expense">Gasto</option><option value="income">Ingreso</option></select>
+                <select name="kind" aria-label="Tipo"><option value="expense">Gasto</option><option value="income">Ingreso</option><option value="transfer">Transferencia</option></select>
                 <input name="amount" inputmode="decimal" placeholder="Cantidad (€)" required>
-                <select name="account" aria-label="Cuenta" required></select>
+                <select name="account" aria-label="Cuenta de origen" required></select>
                 <input name="date" type="date" required>
+                <select name="destination" aria-label="Cuenta de destino" hidden></select>
                 <input name="note" placeholder="Nota (opcional)">
                 <div class="tag-picker"><span class="muted">Etiquetas</span><div id="tag-chips" class="tag-chips"></div><input name="newTags" placeholder="Nuevas etiquetas, separadas por comas"></div>
                 <button class="primary">Guardar</button>
@@ -180,7 +182,7 @@
           <section class="card">
             <h2>Importar y exportar</h2>
             <div class="settings-grid">
-              <article><h3>Exportar CSV</h3><p>Descarga todos los movimientos con sus cuentas y etiquetas, manteniendo las columnas compatibles con Calderilla Android.</p><a class="button primary" href="/api/export.csv" download>Descargar CSV</a></article>
+              <article><h3>Exportar CSV</h3><p>Descarga todos los movimientos y transferencias con sus cuentas y etiquetas, manteniendo las columnas compatibles con Calderilla Android.</p><a class="button primary" href="/api/export.csv" download>Descargar CSV</a></article>
               <article><h3>Importar CSV</h3><p>Las cuentas que aparezcan en el archivo y no existan se crearán automáticamente. Importar el mismo archivo dos veces duplicará sus movimientos.</p><form id="import-form" class="import-form"><input name="file" type="file" accept=".csv,text/csv" required><button class="primary">Importar CSV</button></form><p id="import-result" class="muted"></p></article>
             </div>
           </section>
@@ -193,9 +195,10 @@
     const movementForm=document.querySelector('#movement-form'), accountForm=document.querySelector('#account-form');
     const importForm=document.querySelector('#import-form'), list=document.querySelector('#transactions');
     const chart=document.querySelector('#chart'), daysInput=document.querySelector('#days'), period=document.querySelector('#period');
-    const accountSelect=movementForm.account, chartAccount=document.querySelector('#chart-account'), chartTag=document.querySelector('#chart-tag');
+    const accountSelect=movementForm.account, destinationSelect=movementForm.destination, tagPicker=movementForm.querySelector('.tag-picker');
+    const chartAccount=document.querySelector('#chart-account'), chartTag=document.querySelector('#chart-tag');
     const selectedTags=new Set();
-    let transactions=[], accounts=[], tags=[], defaultAccountId, currency='EUR';
+    let transactions=[], transfers=[], accounts=[], tags=[], defaultAccountId, currency='EUR';
     const money=cents=>new Intl.NumberFormat('es-ES',{style:'currency',currency}).format(cents/100);
     const dateKey=date=>[date.getFullYear(),String(date.getMonth()+1).padStart(2,'0'),String(date.getDate()).padStart(2,'0')].join('-');
     movementForm.date.value=dateKey(new Date());
@@ -228,9 +231,15 @@
     }
 
     function renderAccounts() {
-      const entryValue=accountSelect.value||defaultAccountId, chartValue=chartAccount.value;
-      accountSelect.replaceChildren(...accounts.map(account=>new Option(account.name,account.id)));
+      const entryValue=accountSelect.value||defaultAccountId, destinationValue=destinationSelect.value, chartValue=chartAccount.value;
+      const isTransfer=movementForm.kind.value==='transfer';
+      accountSelect.replaceChildren(...accounts.map(account=>new Option(`${isTransfer?'Origen · ':''}${account.name}`,account.id)));
       accountSelect.value=accounts.some(account=>account.id===entryValue)?entryValue:defaultAccountId;
+      destinationSelect.replaceChildren(...accounts.map(account=>{
+        const option=new Option(`Destino · ${account.name}`,account.id); option.disabled=account.id===accountSelect.value; return option;
+      }));
+      destinationSelect.value=accounts.some(account=>account.id===destinationValue&&account.id!==accountSelect.value)
+        ?destinationValue:(accounts.find(account=>account.id!==accountSelect.value)?.id||'');
       chartAccount.replaceChildren(new Option('Todas las cuentas',''),...accounts.map(account=>new Option(account.name,account.id)));
       chartAccount.value=accounts.some(account=>account.id===chartValue)?chartValue:'';
       document.querySelector('#account-list').replaceChildren(...accounts.map(account=>{
@@ -256,15 +265,24 @@
 
     async function refresh() {
       const state=await fetch('/api/state').then(response=>response.json());
-      transactions=state.transactions; accounts=state.accounts; tags=state.tags; defaultAccountId=state.default_account_id; currency=state.ledger.currency;
-      document.querySelector('#balance').textContent=money(state.balance_cents); renderAccounts(); renderTags(); document.querySelector('#empty').hidden=transactions.length>0;
-      list.replaceChildren(...transactions.map(row=>{
+      transactions=state.transactions; transfers=state.transfers||[]; accounts=state.accounts; tags=state.tags; defaultAccountId=state.default_account_id; currency=state.ledger.currency;
+      const activity=[...transactions.map(row=>({...row,activity_type:'transaction'})),...transfers.map(row=>({...row,activity_type:'transfer'}))]
+        .sort((left,right)=>right.date.localeCompare(left.date)||right.id.localeCompare(left.id));
+      document.querySelector('#balance').textContent=money(state.balance_cents); renderAccounts(); renderTags(); document.querySelector('#empty').hidden=activity.length>0;
+      list.replaceChildren(...activity.map(row=>{
         const item=document.createElement('li'), label=document.createElement('div'), amount=document.createElement('strong'), remove=document.createElement('button'); label.className='transaction-label';
-        label.textContent=`${row.date} · ${row.note||(row.kind==='expense'?'Gasto':'Ingreso')}`;
+        const isTransfer=row.activity_type==='transfer';
+        label.textContent=`${row.date} · ${row.note||(isTransfer?'Transferencia':row.kind==='expense'?'Gasto':'Ingreso')}`;
         const metadata=document.createElement('div'), account=document.createElement('span'); metadata.className='metadata'; account.className='account-tag'; account.textContent=row.account_name; metadata.append(account);
-        row.tags.forEach(name=>{ const tag=document.createElement('span'); tag.className='tag-badge'; tag.textContent=`#${name}`; metadata.append(tag); }); label.append(metadata);
-        amount.textContent=`${row.kind==='expense'?'−':'+'}${money(row.amount_cents)}`; amount.className=row.kind;
-        remove.textContent='×'; remove.ariaLabel='Borrar movimiento'; remove.onclick=async()=>{ await fetch(`/api/transactions/${row.id}`,{method:'DELETE'}); refresh(); };
+        if(isTransfer) {
+          account.textContent=`${row.source_account_name} → ${row.destination_account_name}`;
+        } else {
+          row.tags.forEach(name=>{ const tag=document.createElement('span'); tag.className='tag-badge'; tag.textContent=`#${name}`; metadata.append(tag); });
+        }
+        label.append(metadata);
+        amount.textContent=isTransfer?money(row.amount_cents):`${row.kind==='expense'?'−':'+'}${money(row.amount_cents)}`; amount.className=isTransfer?'transfer':row.kind;
+        remove.textContent='×'; remove.ariaLabel=isTransfer?'Borrar transferencia':'Borrar movimiento';
+        remove.onclick=async()=>{ await fetch(`/api/${isTransfer?'transfers':'transactions'}/${row.id}`,{method:'DELETE'}); refresh(); };
         item.append(label,amount,remove); return item;
       }));
       renderChart();
@@ -272,6 +290,17 @@
 
     period.onchange=()=>{ if(period.value) daysInput.value=period.value; renderChart(); };
     daysInput.oninput=()=>{ period.value=''; renderChart(); }; chartAccount.onchange=renderChart; chartTag.onchange=renderChart;
+    function updateMovementMode() {
+      if(movementForm.kind.value==='transfer'&&accounts.length<2) {
+        alert('Crea al menos dos cuentas para hacer una transferencia'); movementForm.kind.value='expense';
+      }
+      const isTransfer=movementForm.kind.value==='transfer';
+      destinationSelect.hidden=!isTransfer; destinationSelect.required=isTransfer; tagPicker.hidden=isTransfer;
+      movementForm.querySelector('button.primary').textContent=isTransfer?'Transferir':'Guardar';
+      renderAccounts();
+    }
+    movementForm.kind.onchange=updateMovementMode;
+    accountSelect.onchange=()=>{ if(movementForm.kind.value==='transfer') renderAccounts(); };
     accountForm.onsubmit=async event=>{
       event.preventDefault(); const data=new FormData(accountForm), raw=data.get('opening').trim(), parts=raw.match(/^(-)?(\d+)(?:[,.](\d{1,2}))?$/);
       if(raw&&!parts) return alert('Saldo inicial no válido');
@@ -286,6 +315,12 @@
       if(!parts) return alert('Cantidad no válida');
       const amount_cents=Number(parts[1])*100+Number((parts[2]||'').padEnd(2,'0'));
       if(!Number.isSafeInteger(amount_cents)||amount_cents<=0) return alert('Cantidad no válida');
+      if(data.get('kind')==='transfer') {
+        if(data.get('account')===data.get('destination')) return alert('Elige dos cuentas diferentes');
+        const response=await fetch('/api/transfers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source_account_id:data.get('account'),destination_account_id:data.get('destination'),amount_cents,date:data.get('date'),note:data.get('note')||null})});
+        if(!response.ok) return alert('No se pudo realizar la transferencia');
+        movementForm.amount.value=''; movementForm.note.value=''; await refresh(); return;
+      }
       const typed=data.get('newTags').split(',').map(name=>name.trim()).filter(Boolean), assigned=[...selectedTags,...typed];
       const response=await fetch('/api/transactions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({account_id:data.get('account'),kind:data.get('kind'),amount_cents,date:data.get('date'),note:data.get('note')||null,tags:assigned})});
       if(!response.ok) return alert('No se pudo guardar'); movementForm.amount.value=''; movementForm.note.value=''; movementForm.newTags.value=''; selectedTags.clear(); refresh();

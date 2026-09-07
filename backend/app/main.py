@@ -54,6 +54,21 @@ class Movement(Base):
     note: Mapped[str | None] = mapped_column(String(240))
 
 
+class Transfer(Base):
+    __tablename__ = "transfers"
+    __table_args__ = (
+        CheckConstraint("amount_cents > 0"),
+        CheckConstraint("source_account_id <> destination_account_id"),
+    )
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    ledger_id: Mapped[UUID] = mapped_column(ForeignKey("ledgers.id"))
+    source_account_id: Mapped[UUID] = mapped_column(ForeignKey("accounts.id"))
+    destination_account_id: Mapped[UUID] = mapped_column(ForeignKey("accounts.id"))
+    amount_cents: Mapped[int] = mapped_column(BigInteger)
+    date: Mapped[DateValue] = mapped_column(Date)
+    note: Mapped[str | None] = mapped_column(String(240))
+
+
 class Tag(Base):
     __tablename__ = "tags"
     __table_args__ = (UniqueConstraint("ledger_id", "normalized_name"),)
@@ -81,6 +96,14 @@ class MovementIn(BaseModel):
 class AccountIn(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     opening_balance_cents: int = 0
+
+
+class TransferIn(BaseModel):
+    source_account_id: UUID
+    destination_account_id: UUID
+    amount_cents: int = Field(gt=0)
+    date: DateValue = Field(default_factory=DateValue.today)
+    note: str | None = Field(default=None, max_length=240)
 
 
 @asynccontextmanager
@@ -164,6 +187,9 @@ def state(db: Session = Depends(get_db)):
     movements = db.scalars(
         select(Movement).where(Movement.ledger_id == ledger.id).order_by(Movement.date.desc(), Movement.id.desc())
     ).all()
+    transfers = db.scalars(
+        select(Transfer).where(Transfer.ledger_id == ledger.id).order_by(Transfer.date.desc(), Transfer.id.desc())
+    ).all()
     tags = db.scalars(select(Tag).where(Tag.ledger_id == ledger.id).order_by(Tag.name)).all()
     tag_rows = db.execute(
         select(MovementTag.transaction_id, Tag.name).join(Tag, Tag.id == MovementTag.tag_id)
@@ -175,6 +201,9 @@ def state(db: Session = Depends(get_db)):
     balances = {account.id: account.opening_balance_cents for account in accounts}
     for row in movements:
         balances[row.account_id] += row.amount_cents if row.kind == "income" else -row.amount_cents
+    for row in transfers:
+        balances[row.source_account_id] -= row.amount_cents
+        balances[row.destination_account_id] += row.amount_cents
     names = {account.id: account.name for account in accounts}
     default_id = default_account(db, ledger).id
     return {
@@ -192,6 +221,14 @@ def state(db: Session = Depends(get_db)):
              "amount_cents": row.amount_cents, "kind": row.kind, "date": row.date, "note": row.note,
              "tags": movement_tags.get(row.id, [])}
             for row in movements
+        ],
+        "transfers": [
+            {"id": row.id, "source_account_id": row.source_account_id,
+             "source_account_name": names[row.source_account_id],
+             "destination_account_id": row.destination_account_id,
+             "destination_account_name": names[row.destination_account_id],
+             "amount_cents": row.amount_cents, "date": row.date, "note": row.note}
+            for row in transfers
         ],
     }
 
@@ -231,6 +268,9 @@ def export_csv(db: Session = Depends(get_db)):
     movements = db.scalars(
         select(Movement).where(Movement.ledger_id == ledger.id).order_by(Movement.date, Movement.id)
     ).all()
+    transfers = db.scalars(
+        select(Transfer).where(Transfer.ledger_id == ledger.id).order_by(Transfer.date, Transfer.id)
+    ).all()
     tag_rows = db.execute(
         select(MovementTag.transaction_id, Tag.name).join(Tag, Tag.id == MovementTag.tag_id)
         .where(Tag.ledger_id == ledger.id).order_by(Tag.name)
@@ -240,13 +280,24 @@ def export_csv(db: Session = Depends(get_db)):
         movement_tags.setdefault(movement_id, []).append(tag_name)
     output = io.StringIO(newline="")
     writer = csv.writer(output, lineterminator="\r\n")
-    writer.writerow(["fecha", "tipo", "cantidad", "nota", "pendiente", "cuenta", "etiquetas"])
-    for row in movements:
-        writer.writerow([
+    writer.writerow(["fecha", "tipo", "cantidad", "nota", "pendiente", "cuenta", "etiquetas", "cuenta_destino"])
+    rows = [
+        (row.date, str(row.id), [
             row.date.isoformat(), "gasto" if row.kind == "expense" else "ingreso",
             f"{row.amount_cents // 100}.{row.amount_cents % 100:02d}", row.note or "", "", names[row.account_id],
-            ";".join(movement_tags.get(row.id, [])),
+            ";".join(movement_tags.get(row.id, [])), "",
         ])
+        for row in movements
+    ]
+    rows.extend(
+        (row.date, str(row.id), [
+            row.date.isoformat(), "transferencia", f"{row.amount_cents // 100}.{row.amount_cents % 100:02d}",
+            row.note or "", "", names[row.source_account_id], "", names[row.destination_account_id],
+        ])
+        for row in transfers
+    )
+    for _, __, csv_row in sorted(rows, key=lambda item: (item[0], item[1])):
+        writer.writerow(csv_row)
     filename = f"calderilla-{DateValue.today().isoformat()}.csv"
     return Response("\ufeff" + output.getvalue(), media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": f'attachment; filename="{filename}"'})
@@ -279,11 +330,25 @@ async def import_csv(request: Request, db: Session = Depends(get_db)):
     existing = db.scalars(select(Account).where(Account.ledger_id == ledger.id)).all()
     accounts = {account.name.casefold(): account for account in existing}
     imported = skipped = created_accounts = 0
+
+    def imported_account(account_name: str, fallback: Account | None = None) -> Account | None:
+        nonlocal created_accounts
+        account_name = account_name.strip()
+        account = accounts.get(account_name.casefold()) if account_name else fallback
+        if not account and account_name:
+            account = Account(ledger_id=ledger.id, name=account_name)
+            db.add(account)
+            db.flush()
+            accounts[account_name.casefold()] = account
+            created_accounts += 1
+        return account
+
     for raw_row in reader:
         row = {key.strip().lower(): (value or "") for key, value in raw_row.items() if key}
         try:
             day = DateValue.fromisoformat(row["fecha"].strip())
-            kind = {"gasto": "expense", "ingreso": "income", "expense": "expense", "income": "income"}[
+            kind = {"gasto": "expense", "ingreso": "income", "expense": "expense", "income": "income",
+                    "transferencia": "transfer", "transfer": "transfer"}[
                 row["tipo"].strip().lower()
             ]
             amount = csv_cents(row["cantidad"])
@@ -291,14 +356,23 @@ async def import_csv(request: Request, db: Session = Depends(get_db)):
         except (KeyError, ValueError):
             skipped += 1
             continue
-        account_name = row.get("cuenta", "").strip()
-        account = accounts.get(account_name.casefold()) if account_name else default
-        if not account:
-            account = Account(ledger_id=ledger.id, name=account_name)
-            db.add(account)
-            db.flush()
-            accounts[account_name.casefold()] = account
-            created_accounts += 1
+        if kind == "transfer":
+            destination_name = row.get("cuenta_destino", "").strip()
+            if not destination_name:
+                skipped += 1
+                continue
+            account = imported_account(row.get("cuenta", ""), default)
+            destination = imported_account(destination_name)
+            if not account or not destination or account.id == destination.id:
+                skipped += 1
+                continue
+            db.add(Transfer(
+                ledger_id=ledger.id, source_account_id=account.id, destination_account_id=destination.id,
+                amount_cents=amount, date=day, note=row.get("nota", "").strip() or None,
+            ))
+            imported += 1
+            continue
+        account = imported_account(row.get("cuenta", ""), default)
         movement = Movement(
             ledger_id=ledger.id, account_id=account.id, amount_cents=amount, kind=kind,
             date=day, note=row.get("nota", "").strip() or None,
@@ -331,13 +405,40 @@ def add_transaction(data: MovementIn, db: Session = Depends(get_db)):
     return movement
 
 
+@app.post("/api/transfers", status_code=201)
+def add_transfer(data: TransferIn, db: Session = Depends(get_db)):
+    ledger = current_ledger(db)
+    source = db.get(Account, data.source_account_id)
+    destination = db.get(Account, data.destination_account_id)
+    if not source or source.ledger_id != ledger.id or not destination or destination.ledger_id != ledger.id:
+        raise HTTPException(404, "Account not found")
+    if source.id == destination.id:
+        raise HTTPException(422, "Source and destination accounts must be different")
+    transfer = Transfer(**data.model_dump(), ledger_id=ledger.id)
+    db.add(transfer)
+    db.commit()
+    db.refresh(transfer)
+    return transfer
+
+
 @app.delete("/api/transactions/{movement_id}", status_code=204)
 def delete_transaction(movement_id: UUID, db: Session = Depends(get_db)):
+    ledger = current_ledger(db)
     movement = db.get(Movement, movement_id)
-    if not movement:
+    if not movement or movement.ledger_id != ledger.id:
         raise HTTPException(404, "Transaction not found")
     db.execute(delete(MovementTag).where(MovementTag.transaction_id == movement.id))
     db.delete(movement)
+    db.commit()
+
+
+@app.delete("/api/transfers/{transfer_id}", status_code=204)
+def delete_transfer(transfer_id: UUID, db: Session = Depends(get_db)):
+    ledger = current_ledger(db)
+    transfer = db.get(Transfer, transfer_id)
+    if not transfer or transfer.ledger_id != ledger.id:
+        raise HTTPException(404, "Transfer not found")
+    db.delete(transfer)
     db.commit()
 
 

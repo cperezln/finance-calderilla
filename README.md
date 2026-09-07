@@ -1,6 +1,6 @@
 # Calderilla web prototype
 
-Minimal vertical prototype: one personal ledger, multiple accounts, tagged income/expense transactions, charts and Android-compatible CSV import/export, using FastAPI, PostgreSQL and a build-free frontend.
+Minimal vertical prototype: one personal ledger, multiple accounts, tagged income/expense transactions, atomic transfers between accounts, charts and Android-compatible CSV import/export, using FastAPI, PostgreSQL and a build-free frontend.
 
 ## Run
 
